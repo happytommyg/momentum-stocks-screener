@@ -81,7 +81,7 @@ def screen(returns_df, top_n):
     step1 = returns_df["6ヶ月騰落率"].nlargest(top_n * 4).index
     step2 = returns_df.loc[step1, "3ヶ月騰落率"].nlargest(top_n * 2).index
     step3 = returns_df.loc[step2, "1ヶ月騰落率"].nlargest(top_n).index
-    return returns_df.loc[step3].sort_values("1ヶ月騰落率", ascending=False)
+    return returns_df.loc[step3].sort_values("6ヶ月騰落率", ascending=False)
 
 # ============================================================
 # UI

@@ -18,7 +18,7 @@ WINDOW_1M  = 21
 # ============================================================
 # 銘柄リスト取得
 # ============================================================
-@st.cache_data(ttl=60 * 60 * 24)  # 1日キャッシュ
+@st.cache_data(ttl=60 * 60 * 24)
 def get_tickers(index_name):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -41,7 +41,7 @@ def get_tickers(index_name):
 # ============================================================
 # 価格データ取得 & リターン計算
 # ============================================================
-@st.cache_data(ttl=60 * 60 * 6)  # 6時間キャッシュ
+@st.cache_data(ttl=60 * 60 * 6)
 def calc_returns(tickers):
     start = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
     df_raw = yf.download(
@@ -51,7 +51,6 @@ def calc_returns(tickers):
     if df_raw.empty:
         return None, None
 
-    # 終値だけ抽出
     close_dict = {}
     for t in tickers:
         try:
@@ -77,7 +76,6 @@ def calc_returns(tickers):
 # 段階スクリーニング
 # ============================================================
 def screen(returns_df, top_n):
-    # 6ヶ月上位 → 3ヶ月上位 → 1ヶ月上位 で絞り込む
     step1 = returns_df["6ヶ月騰落率"].nlargest(top_n * 4).index
     step2 = returns_df.loc[step1, "3ヶ月騰落率"].nlargest(top_n * 2).index
     step3 = returns_df.loc[step2, "1ヶ月騰落率"].nlargest(top_n).index
@@ -122,15 +120,18 @@ if run:
 
         result = screen(returns_df, top_n)
 
-        # 表示用フォーマット（%表示）
-        display = result.copy()
-        for col in display.columns:
-            display[col] = display[col].map(lambda x: f"{x*100:+.1f}%")
+        # TradingViewリンクを追加
+        result = result.copy()
+        result.index.name = "銘柄"
+        result = result.reset_index()
+        result["TradingView"] = result["銘柄"].apply(
+            lambda t: f"https://www.tradingview.com/chart/?symbol=NASDAQ:{t}"
+        )
 
-        # カラーマップ付きで表示
+        # 色付け関数
         def color_cell(val):
             try:
-                v = float(val.replace("%", "").replace("+", ""))
+                v = float(val) * 100
                 if v >= 10:
                     return "background-color: #c6efce; color: #276221"
                 elif v >= 0:
@@ -142,8 +143,27 @@ if run:
             except Exception:
                 return ""
 
-        styled = display.style.applymap(color_cell)
-        st.dataframe(styled, use_container_width=True, height=min(400, (top_n + 1) * 35 + 10))
+        ret_cols = ["6ヶ月騰落率", "3ヶ月騰落率", "1ヶ月騰落率"]
+
+        styled = (
+            result.style
+            .applymap(color_cell, subset=ret_cols)
+            .format("{:+.1f}%", subset=ret_cols,
+                    formatter=lambda x: f"{x*100:+.1f}%")
+        )
+
+        st.dataframe(
+            styled,
+            column_config={
+                "TradingView": st.column_config.LinkColumn(
+                    "TradingView",
+                    display_text="チャートを見る"
+                )
+            },
+            use_container_width=True,
+            height=min(400, (top_n + 1) * 35 + 10),
+            hide_index=True,
+        )
 
         st.divider()
 

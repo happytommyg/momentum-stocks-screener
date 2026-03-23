@@ -145,11 +145,10 @@ if run:
 
         ret_cols = ["6ヶ月騰落率", "3ヶ月騰落率", "1ヶ月騰落率"]
 
-        styled = (
+       styled = (
             result.style
             .applymap(color_cell, subset=ret_cols)
-            .format("{:+.1f}%", subset=ret_cols,
-                    formatter=lambda x: f"{x*100:+.1f}%")
+            .format({col: lambda x: f"{x*100:+.1f}%" for col in ret_cols})
         )
 
         st.dataframe(

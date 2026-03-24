@@ -76,6 +76,12 @@ def color_cell(val):
     except Exception:
         return ""
 
+# session_state 初期化
+if "results" not in st.session_state:
+    st.session_state.results = {}
+if "selected_ticker" not in st.session_state:
+    st.session_state.selected_ticker = None
+
 st.title("リーダー株スクリーナー")
 st.caption("6ヶ月→3ヶ月の騰落率で段階スクリーニング")
 
@@ -84,15 +90,11 @@ with st.sidebar:
     top_n = st.slider("表示件数", min_value=5, max_value=30, value=SHOW_TOP_N, step=5)
     run = st.button("スクリーニング実行", type="primary", use_container_width=True)
 
-# 銘柄選択の状態管理
-if "selected_ticker" not in st.session_state:
-    st.session_state.selected_ticker = None
-
+# スクリーニング実行して結果をsession_stateに保存
 if run:
     st.session_state.selected_ticker = None
+    st.session_state.results = {}
     indexes = ["S&P500", "NASDAQ-100"] if index_choice == "両方" else [index_choice]
-    all_results = {}
-
     for idx in indexes:
         with st.spinner(f"{idx} の銘柄データを取得中..."):
             tickers = get_tickers(idx)
@@ -103,11 +105,6 @@ if run:
             if returns_df is None:
                 st.error("価格データを取得できませんでした")
                 continue
-        all_results[idx] = (returns_df, base_date)
-
-    for idx, (returns_df, base_date) in all_results.items():
-        st.subheader(idx)
-        st.caption(f"基準日: {base_date}　対象: {len(returns_df)}銘柄")
         result = screen(returns_df, top_n)
         result = result.copy()
         result.index.name = "銘柄"
@@ -115,6 +112,13 @@ if run:
         result["TradingView"] = result["銘柄"].apply(
             lambda t: f"https://www.tradingview.com/chart/?symbol={t}"
         )
+        st.session_state.results[idx] = (result, base_date, len(returns_df))
+
+# 結果を表示（session_stateから）
+if st.session_state.results:
+    for idx, (result, base_date, total) in st.session_state.results.items():
+        st.subheader(idx)
+        st.caption(f"基準日: {base_date}　対象: {total}銘柄")
 
         ret_cols = ["6ヶ月騰落率", "3ヶ月騰落率"]
         fmt = {col: lambda x: f"{x*100:+.1f}%" for col in ret_cols}
@@ -126,42 +130,34 @@ if run:
                 "TradingView": st.column_config.LinkColumn("TradingView", display_text="チャートを見る")
             },
             use_container_width=True,
-            height=min(500, (top_n + 1) * 35 + 10),
+            height=min(500, (len(result) + 1) * 35 + 10),
             hide_index=True,
         )
 
-        # 「Claudeに聞く」ボタンを銘柄ごとに表示
-        st.markdown("**気になる銘柄をClaudeに聞く：**")
-        cols = st.columns(min(top_n, 8))
+        # 銘柄ボタン
+        st.markdown("**気になる銘柄をクリック：**")
+        cols = st.columns(8)
         for i, ticker in enumerate(result["銘柄"].tolist()):
-            with cols[i % min(top_n, 8)]:
-                if st.button(ticker, key=f"{idx}_{ticker}"):
+            with cols[i % 8]:
+                if st.button(ticker, key=f"btn_{idx}_{ticker}"):
                     st.session_state.selected_ticker = ticker
 
         st.divider()
 
-# 選択された銘柄の情報を表示
-if st.session_state.selected_ticker:
-    ticker = st.session_state.selected_ticker
-    st.subheader(f"{ticker} について")
-    st.markdown(f"""
-この銘柄についてClaudeに質問するには、以下をコピーしてClaudeのチャットに貼り付けてください：
+    # 選択銘柄の情報パネル
+    if st.session_state.selected_ticker:
+        ticker = st.session_state.selected_ticker
+        st.subheader(f"📌 {ticker}")
+        st.markdown(f"以下の質問文をコピーしてClaudeに貼り付けてください：")
+        st.code(f"{ticker} について教えてください。どんな会社で、なぜ最近株価が強いのか教えてください。", language=None)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.link_button("TradingViewでチャートを見る", f"https://www.tradingview.com/chart/?symbol={ticker}", use_container_width=True)
+        with col2:
+            st.link_button("Yahoo Financeで詳細を見る", f"https://finance.yahoo.com/quote/{ticker}", use_container_width=True)
 
-> **{ticker} について教えてください。どんな会社で、なぜ最近株価が強いのか教えてください。**
-""")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.link_button(
-            f"TradingViewでチャートを見る",
-            f"https://www.tradingview.com/chart/?symbol={ticker}",
-            use_container_width=True
-        )
-    with col2:
-        st.link_button(
-            f"Yahoo Financeで詳細を見る",
-            f"https://finance.yahoo.com/quote/{ticker}",
-            use_container_width=True
-        )
+else:
+    st.info("左のパネルで設定して「スクリーニング実行」を押してください。")
 
 st.markdown(
     "<p style='font-size:11px;color:gray;margin-top:2rem;'>"

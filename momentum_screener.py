@@ -11,6 +11,75 @@ SHOW_TOP_N = 15
 WINDOW_6M  = 126
 WINDOW_3M  = 63
 
+# セクターETFマップ（騰落率計算用）
+SECTOR_ETFS = {
+    "情報技術":     "XLK",
+    "半導体":       "SOXX",
+    "エネルギー":   "XLE",
+    "素材":         "XLB",
+    "資本財":       "XLI",
+    "金融":         "XLF",
+    "ヘルスケア":   "XLV",
+    "生活必需品":   "XLP",
+    "通信":         "XLC",
+    "公益":         "XLU",
+    "不動産":       "XLRE",
+    "一般消費財":   "XLY",
+}
+
+# 銘柄→セクターマップ
+TICKER_SECTOR = {
+    # 半導体・テクノロジー
+    "MU":"半導体","AMAT":"半導体","LRCX":"半導体","KLAC":"半導体",
+    "NVDA":"半導体","AMD":"半導体","INTC":"半導体","MRVL":"半導体",
+    "AVGO":"半導体","TSM":"半導体","ASML":"半導体","TER":"半導体",
+    "SNDK":"情報技術","WDC":"情報技術","STX":"情報技術",
+    "CIEN":"情報技術","KEYS":"情報技術","DELL":"情報技術",
+    "GEV":"資本財","HON":"資本財","MMM":"資本財","GLW":"資本財",
+    # エネルギー
+    "APA":"エネルギー","HAL":"エネルギー","SLB":"エネルギー",
+    "BKR":"エネルギー","VLO":"エネルギー","MPC":"エネルギー",
+    "DVN":"エネルギー","FANG":"エネルギー","XOM":"エネルギー",
+    "CVX":"エネルギー","COP":"エネルギー","OXY":"エネルギー",
+    "EOG":"エネルギー","PSX":"エネルギー","TRGP":"エネルギー",
+    # 素材
+    "CF":"素材","LYB":"素材","DOW":"素材","NEM":"素材",
+    # 金融
+    "JPM":"金融","BAC":"金融","GS":"金融","MS":"金融",
+    # ヘルスケア
+    "MRNA":"ヘルスケア","AMGN":"ヘルスケア","GILD":"ヘルスケア",
+    # 生活必需品
+    "COST":"生活必需品","WMT":"生活必需品","SBUX":"生活必需品",
+    # 一般消費財
+    "ABNB":"一般消費財","TSLA":"一般消費財",
+    # 通信
+    "META":"通信","GOOGL":"通信","GOOG":"通信",
+    # 公益
+    "AEP":"公益","EXC":"公益","XEL":"公益",
+    # 資本財・運輸
+    "DAL":"資本財","ODFL":"資本財","FIX":"資本財",
+    # その他
+    "TPL":"エネルギー","ARM":"半導体","ROST":"一般消費財",
+    "WMT":"生活必需品","LIN":"素材","TXN":"半導体",
+    "CSX":"資本財","FAST":"資本財","ADI":"半導体",
+    "MAR":"一般消費財","HON":"資本財","MPWR":"半導体",
+}
+
+SECTOR_COLORS = {
+    "半導体":     "#1D9E75",
+    "情報技術":   "#7F77DD",
+    "エネルギー": "#378ADD",
+    "素材":       "#D85A30",
+    "資本財":     "#EF9F27",
+    "金融":       "#D4537E",
+    "ヘルスケア": "#5DCAA5",
+    "生活必需品": "#888780",
+    "通信":       "#AFA9EC",
+    "公益":       "#97C459",
+    "不動産":     "#F0997B",
+    "一般消費財": "#FAC775",
+}
+
 @st.cache_data(ttl=60 * 60 * 24)
 def get_tickers(index_name):
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -57,10 +126,52 @@ def calc_returns(tickers):
     result = result.dropna()
     return result, base_date
 
+@st.cache_data(ttl=60 * 60 * 6)
+def calc_sector_returns():
+    etf_list = list(SECTOR_ETFS.values())
+    start = (datetime.now() - timedelta(days=200)).strftime("%Y-%m-%d")
+    df_raw = yf.download(etf_list, start=start, auto_adjust=True,
+                         group_by="ticker", progress=False, threads=True)
+    results = {}
+    for sector, etf in SECTOR_ETFS.items():
+        try:
+            s = df_raw[etf]["Close"].dropna()
+            if len(s) > WINDOW_6M:
+                r6m = (s.iloc[-1] / s.iloc[-WINDOW_6M] - 1) * 100
+                r3m = (s.iloc[-1] / s.iloc[-WINDOW_3M] - 1) * 100
+                results[sector] = {"6ヶ月": round(r6m, 1), "3ヶ月": round(r3m, 1)}
+        except Exception:
+            continue
+    return pd.DataFrame(results).T
+
 def screen(returns_df, top_n):
     step1 = returns_df["6ヶ月騰落率"].nlargest(top_n * 4).index
     step2 = returns_df.loc[step1, "3ヶ月騰落率"].nlargest(top_n).index
     return returns_df.loc[step2].sort_values("6ヶ月騰落率", ascending=False)
+
+def get_sector(ticker):
+    return TICKER_SECTOR.get(ticker, "その他")
+
+def sector_score(sector, sector_df):
+    if sector not in sector_df.index:
+        return None
+    r6 = sector_df.loc[sector, "6ヶ月"]
+    r3 = sector_df.loc[sector, "3ヶ月"]
+    # 6ヶ月60% + 3ヶ月40%の加重スコア
+    score = r6 * 0.6 + r3 * 0.4
+    return round(score, 1)
+
+def score_label(score):
+    if score is None:
+        return "—"
+    if score >= 30:
+        return f"🔥 {score:+.1f}pt"
+    elif score >= 15:
+        return f"↑ {score:+.1f}pt"
+    elif score >= 0:
+        return f"→ {score:+.1f}pt"
+    else:
+        return f"↓ {score:+.1f}pt"
 
 def color_cell(val):
     try:
@@ -76,34 +187,39 @@ def color_cell(val):
     except Exception:
         return ""
 
-# session_state 初期化
+# session_state初期化
 if "results" not in st.session_state:
     st.session_state.results = {}
+if "sector_df" not in st.session_state:
+    st.session_state.sector_df = None
 if "selected_ticker" not in st.session_state:
     st.session_state.selected_ticker = None
 
 st.title("リーダー株スクリーナー")
-st.caption("6ヶ月→3ヶ月の騰落率で段階スクリーニング")
+st.caption("セクター分析 → 個別銘柄のトップダウンアプローチ")
 
 with st.sidebar:
     index_choice = st.selectbox("対象指数", ["S&P500", "NASDAQ-100", "両方"])
     top_n = st.slider("表示件数", min_value=5, max_value=30, value=SHOW_TOP_N, step=5)
     run = st.button("スクリーニング実行", type="primary", use_container_width=True)
 
-# スクリーニング実行して結果をsession_stateに保存
 if run:
     st.session_state.selected_ticker = None
     st.session_state.results = {}
+
+    # Step1: セクター騰落率
+    with st.spinner("セクターデータを取得中..."):
+        st.session_state.sector_df = calc_sector_returns()
+
+    # Step2: 個別銘柄
     indexes = ["S&P500", "NASDAQ-100"] if index_choice == "両方" else [index_choice]
     for idx in indexes:
         with st.spinner(f"{idx} の銘柄データを取得中..."):
             tickers = get_tickers(idx)
             if not tickers:
-                st.error("銘柄リストを取得できませんでした")
                 continue
             returns_df, base_date = calc_returns(tickers)
             if returns_df is None:
-                st.error("価格データを取得できませんでした")
                 continue
         result = screen(returns_df, top_n)
         result = result.copy()
@@ -114,11 +230,51 @@ if run:
         )
         st.session_state.results[idx] = (result, base_date, len(returns_df))
 
-# 結果を表示（session_stateから）
+# ==================== 表示 ====================
+if st.session_state.sector_df is not None and not st.session_state.sector_df.empty:
+    sdf = st.session_state.sector_df.copy()
+
+    st.subheader("Step 1 ｜ セクター別騰落率")
+    st.caption("強いセクターのリーダー株を狙う")
+
+    # 6ヶ月順でソート
+    sdf_sorted = sdf.sort_values("6ヶ月", ascending=False)
+
+    # カード表示
+    cols = st.columns(4)
+    for i, (sector, row) in enumerate(sdf_sorted.iterrows()):
+        color = SECTOR_COLORS.get(sector, "#888780")
+        r6 = row["6ヶ月"]
+        r3 = row["3ヶ月"]
+        icon = "🔥" if r6 >= 30 else "↑" if r6 >= 10 else "→" if r6 >= 0 else "↓"
+        with cols[i % 4]:
+            st.markdown(
+                f"""<div style="border:0.5px solid {color}44;border-left:3px solid {color};
+                border-radius:8px;padding:10px 12px;margin-bottom:10px;
+                background:var(--color-background-primary)">
+                <div style="font-size:11px;color:{color};font-weight:500">{icon} {sector}</div>
+                <div style="font-size:18px;font-weight:500;color:var(--color-text-primary)">
+                {r6:+.1f}%</div>
+                <div style="font-size:11px;color:var(--color-text-secondary)">
+                3ヶ月: {r3:+.1f}%</div></div>""",
+                unsafe_allow_html=True
+            )
+
+    st.divider()
+
 if st.session_state.results:
+    st.subheader("Step 2 ｜ 個別銘柄ランキング")
+
     for idx, (result, base_date, total) in st.session_state.results.items():
-        st.subheader(idx)
-        st.caption(f"基準日: {base_date}　対象: {total}銘柄")
+        st.markdown(f"**{idx}**　<span style='font-size:12px;color:gray'>基準日: {base_date}　対象: {total}銘柄</span>",
+                    unsafe_allow_html=True)
+
+        # セクター列・スコア列を追加
+        sdf = st.session_state.sector_df
+        result["セクター"] = result["銘柄"].apply(get_sector)
+        result["セクター強度"] = result["銘柄"].apply(
+            lambda t: score_label(sector_score(get_sector(t), sdf))
+        )
 
         ret_cols = ["6ヶ月騰落率", "3ヶ月騰落率"]
         fmt = {col: lambda x: f"{x*100:+.1f}%" for col in ret_cols}
@@ -127,8 +283,14 @@ if st.session_state.results:
         st.dataframe(
             styled,
             column_config={
-                "TradingView": st.column_config.LinkColumn("TradingView", display_text="チャートを見る")
+                "TradingView": st.column_config.LinkColumn(
+                    "TradingView", display_text="チャートを見る"
+                ),
+                "セクター強度": st.column_config.TextColumn(
+                    "セクター強度", help="セクターETFの6ヶ月×60%+3ヶ月×40%の加重スコア"
+                ),
             },
+            column_order=["銘柄", "セクター", "セクター強度", "6ヶ月騰落率", "3ヶ月騰落率", "TradingView"],
             use_container_width=True,
             height=min(500, (len(result) + 1) * 35 + 10),
             hide_index=True,
@@ -141,22 +303,35 @@ if st.session_state.results:
             with cols[i % 8]:
                 if st.button(ticker, key=f"btn_{idx}_{ticker}"):
                     st.session_state.selected_ticker = ticker
-
         st.divider()
 
-    # 選択銘柄の情報パネル
+    # 選択銘柄パネル
     if st.session_state.selected_ticker:
         ticker = st.session_state.selected_ticker
-        st.subheader(f"📌 {ticker}")
-        st.markdown(f"以下の質問文をコピーしてClaudeに貼り付けてください：")
-        st.code(f"{ticker} について教えてください。どんな会社で、なぜ最近株価が強いのか教えてください。", language=None)
-        col1, col2 = st.columns(2)
-        with col1:
-            st.link_button("TradingViewでチャートを見る", f"https://www.tradingview.com/chart/?symbol={ticker}", use_container_width=True)
-        with col2:
-            st.link_button("Yahoo Financeで詳細を見る", f"https://finance.yahoo.com/quote/{ticker}", use_container_width=True)
+        sector = get_sector(ticker)
+        sdf = st.session_state.sector_df
+        sc = sector_score(sector, sdf)
 
-else:
+        st.subheader(f"📌 {ticker}")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"**セクター:** {sector}")
+            if sc is not None:
+                st.markdown(f"**セクター強度スコア:** {score_label(sc)}")
+        with c2:
+            st.link_button("TradingViewでチャートを見る",
+                           f"https://www.tradingview.com/chart/?symbol={ticker}",
+                           use_container_width=True)
+            st.link_button("Yahoo Financeで詳細を見る",
+                           f"https://finance.yahoo.com/quote/{ticker}",
+                           use_container_width=True)
+
+        st.code(
+            f"{ticker} について教えてください。どんな会社で、なぜ最近株価が強いのか教えてください。",
+            language=None
+        )
+
+elif not run:
     st.info("左のパネルで設定して「スクリーニング実行」を押してください。")
 
 st.markdown(
